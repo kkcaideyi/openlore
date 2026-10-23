@@ -12,12 +12,12 @@
 | --- | --- |
 | 个人 Fork / origin | `git@github.com:kkcaideyi/openlore.git` |
 | 原仓库 / upstream | `git@github.com:decent-yu/openlore.git` |
-| 独立工作区 | `D:\Project\openlore-x` |
+| 工作目录 | `D:\Project\openlore`，沿用现有检出目录，不另建工作树 |
 | 分支 | `ykzhu14/接入x` |
 | 创建基线 | Fork 的 `origin/main`，`926347d5f17943847d639b75c8f9349780efcd6e` |
-| 原检出目录 | `D:\Project\openlore`，保留 `main` |
+| 开发方式 | 在现有目录切换需求分支，`main` 分支保留 |
 
-项目总体分析见 [OpenLore 项目理解与源码分析](../openlore-understanding/01-context-brief.md)。该分析原件已移至本工作区。
+项目总体分析见 [OpenLore 项目理解与源码分析](../openlore-understanding/01-context-brief.md)。两份文档均保存在本需求分支。
 
 ## 已确认的现状
 
@@ -75,9 +75,9 @@
 
 - 已克隆原项目，并完成核心链路源码分析。
 - 用户已创建个人 Fork，本地 `origin` 指向 `kkcaideyi/openlore`，`upstream` 指向原项目。
-- 已建立本需求独立分支与工作区，集中保存总体分析和本需求记录。
+- 已建立本需求分支，在 `D:\Project\openlore` 集中保存总体分析和本需求记录；不使用单独工作树。
 - 未安装第三方采集器、部署 RSS 服务、采集真实 X 数据或启动业务验证。
-- 未修改应用源码，未创建 PR；本次未提交或推送分支。
+- 两份文档已提交到需求分支；未修改应用源码、推送分支或创建 PR。
 
 ## 下一步与待确定事项
 
