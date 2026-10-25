@@ -3,7 +3,6 @@
 import json
 import subprocess
 import sys
-import tempfile
 from openlore_collectors.web_feed.parser import parse_feed_content
 from openlore_collectors.web_page.extractor import extract_article_content
 
@@ -64,31 +63,29 @@ def test_extract_article():
     assert data["images"][0]["alt"] == "Architecture Diagram"
 
 
-def test_cli_execution():
-    with tempfile.NamedTemporaryFile("w+", suffix=".xml") as f:
-        f.write(SAMPLE_RSS.decode("utf-8"))
-        f.flush()
+def test_cli_execution(tmp_path):
+    feed = tmp_path / "feed.xml"
+    feed.write_bytes(SAMPLE_RSS)
+    req = {
+        "protocol_version": 1,
+        "job_id": "test-job-1",
+        "operation": "parse_feed",
+        "input_path": str(feed),
+        "original_url": "https://example.com/rss",
+    }
 
-        req = {
-            "protocol_version": 1,
-            "job_id": "test-job-1",
-            "operation": "parse_feed",
-            "input_path": f.name,
-            "original_url": "https://example.com/rss",
-        }
-
-        res = subprocess.run(
-            [sys.executable, "-m", "openlore_collectors"],
-            input=json.dumps(req),
-            capture_output=True,
-            text=True,
-        )
-        assert res.returncode == 0
-        output = json.loads(res.stdout.strip())
-        assert output["protocol_version"] == 1
-        assert output["job_id"] == "test-job-1"
-        assert output["status"] == "success"
-        assert len(output["data"]["entries"]) == 1
+    res = subprocess.run(
+        [sys.executable, "-m", "openlore_collectors"],
+        input=json.dumps(req),
+        capture_output=True,
+        text=True,
+    )
+    assert res.returncode == 0
+    output = json.loads(res.stdout.strip())
+    assert output["protocol_version"] == 1
+    assert output["job_id"] == "test-job-1"
+    assert output["status"] == "success"
+    assert len(output["data"]["entries"]) == 1
 
 
 def test_publication_date_uses_explicit_article_metadata_not_modified_or_related_dates():

@@ -24,7 +24,7 @@ import {
   reportPlansTable,
 } from "../../infrastructure/persistence/sqlite/schema.js";
 import { articleReviewsService } from "../processing/article-reviews.js";
-import { collectionService } from "../collection/service.js";
+import { collectionService, sourceCooldown } from "../collection/service.js";
 import { retryRunDelivery } from "../delivery/retry.js";
 import { deliveryService } from "../delivery/service.js";
 import { groupsService } from "../groups/service.js";
@@ -105,6 +105,8 @@ export class AppScheduler {
     );
     const ids: string[] = [];
     for (const source of sources) {
+      // Cooldown outranks pending work and forced polls; it is an upstream limit.
+      if (sourceCooldown(source.id, source.capability_id)) continue;
       const last = source.last_polled_at
         ? Date.parse(source.last_polled_at)
         : 0;
@@ -116,7 +118,7 @@ export class AppScheduler {
         .get(source.id, new Date().toISOString());
       const continuation = sqlite
         .prepare(
-          "SELECT 1 FROM source_states WHERE source_id=? AND json_extract(state_json,'$.pending_items_ref') IS NOT NULL LIMIT 1",
+          "SELECT 1 FROM source_states WHERE source_id=? AND (json_extract(state_json,'$.pending_items_ref') IS NOT NULL OR json_extract(state_json,'$.pending.cursor') IS NOT NULL) LIMIT 1",
         )
         .get(source.id);
       if (

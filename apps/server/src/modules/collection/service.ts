@@ -17,11 +17,13 @@ import { GithubApiCollectorAdapter } from "./collectors/github_api/adapter.js";
 import { PlatformCollectorAdapter } from "./collectors/platform/adapter.js";
 import { WebFeedCollectorAdapter } from "./collectors/web_feed/adapter.js";
 import { WebPageCollectorAdapter } from "./collectors/web_page/adapter.js";
+import { XUserCollectorAdapter } from "./collectors/x_user/adapter.js";
 import { collectorRegistry } from "./registry.js";
 import {
   evaluateContent,
   normalizeUrl,
   QUALITY_VERSION,
+  isPlatformPost,
   ruleRevision,
 } from "./quality.js";
 import { expireCollectionDetails, removeUnusedBlobs, terminalStates, withoutBody } from './retention.js';
@@ -31,6 +33,7 @@ collectorRegistry.register(new WebFeedCollectorAdapter());
 collectorRegistry.register(new WebPageCollectorAdapter());
 collectorRegistry.register(new GithubApiCollectorAdapter());
 collectorRegistry.register(new PlatformCollectorAdapter());
+collectorRegistry.register(new XUserCollectorAdapter());
 
 type Candidate = {
   source_id: string;
@@ -47,6 +50,35 @@ type Candidate = {
 const hash = (value: string) =>
   crypto.createHash("sha256").update(value).digest("hex");
 
+function savedState(sourceId: string, capabilityId: string): Record<string, unknown> | null {
+  const row = getSqliteDatabase()
+    .prepare("SELECT state_json FROM source_states WHERE source_id = ? AND capability_id = ?")
+    .get(sourceId, capabilityId) as { state_json: string } | undefined;
+  return row ? JSON.parse(row.state_json) : null;
+}
+
+function saveState(sourceId: string, capabilityId: string, state: Record<string, unknown>): void {
+  getSqliteDatabase().prepare(
+    "INSERT INTO source_states(source_id, capability_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(source_id, capability_id, revision) DO UPDATE SET state_json=excluded.state_json, updated_at=excluded.updated_at",
+  ).run(sourceId, capabilityId, "rev_1", JSON.stringify(state), new Date().toISOString());
+}
+
+/** Upstream cooldown (rate limit) blocks every entry point, including previews and forced polls. */
+export function sourceCooldown(sourceId: string, capabilityId: string): string | null {
+  const until = savedState(sourceId, capabilityId)?.cooldown_until;
+  return typeof until === "string" && Date.parse(until) > Date.now() ? until : null;
+}
+
+function cooldownResult(source: Source, runId: string, until: string): CollectionResult {
+  return {
+    run_id: runId, source_id: source.id, capability_id: source.capability_id, status: "failed", items: [],
+    next_state: null, scan: "unknown", observed_at: new Date().toISOString(),
+    errors: [{ code: "cooldown", message: `来源冷却中，${until} 后重试`, retryable: true,
+      retry_after_seconds: Math.ceil((Date.parse(until) - Date.now()) / 1000) }],
+    stats: { requests: 0, items_observed: 0, items_returned: 0 },
+  };
+}
+
 export class CollectionService {
   private active = new Map<string, Promise<CollectionResult>>();
   private retiredRawRefs = new Set<string>();
@@ -59,8 +91,11 @@ export class CollectionService {
     const adapter = collectorRegistry.get(source.capability_id);
     if (!adapter)
       throw new Error(`Unsupported capability: ${source.capability_id}`);
+    const previewId = `preview_${crypto.randomUUID()}`;
+    const cooldown = sourceCooldown(source.id, source.capability_id);
+    if (cooldown) return cooldownResult(source, previewId, cooldown);
     const { timezone } = await settingsService.getSettings();
-    const previewRequest = this.request(source, `preview_${crypto.randomUUID()}`, null, 10);
+    const previewRequest = this.request(source, previewId, null, 10);
     previewRequest.options = { ...previewRequest.options, timezone };
     const result = await adapter.collect(previewRequest);
     const counts: Record<string, number> = {};
@@ -115,16 +150,13 @@ export class CollectionService {
     if (!adapter)
       throw new Error(`Unsupported capability: ${source.capability_id}`);
     const db = getSqliteDatabase();
-    expireCollectionDetails();
-    const state = db
-      .prepare(
-        "SELECT state_json FROM source_states WHERE source_id = ? AND capability_id = ?",
-      )
-      .get(sourceId, source.capability_id) as
-      { state_json: string } | undefined;
     const id = runId || `collect_${crypto.randomUUID()}`;
+    const cooldown = sourceCooldown(sourceId, source.capability_id);
+    if (cooldown) return cooldownResult(source, id, cooldown);
+    expireCollectionDetails();
+    const { cooldown_until: _expired, ...state } = savedState(sourceId, source.capability_id) || {};
     const { timezone } = await settingsService.getSettings();
-    const collectionRequest = this.request(source, id, state ? JSON.parse(state.state_json) : null);
+    const collectionRequest = this.request(source, id, Object.keys(state).length ? state : null);
     collectionRequest.options = { ...collectionRequest.options, timezone };
     const result = await adapter.collect(collectionRequest);
     const counts: Record<string, number> = {};
@@ -135,17 +167,12 @@ export class CollectionService {
       counts[reason] = (counts[reason] || 0) + 1;
       if (reason === "ready") newlyReady++;
     }
-    if (result.status !== "failed" && result.next_state) {
-      db.prepare(
-        "INSERT INTO source_states(source_id, capability_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(source_id, capability_id, revision) DO UPDATE SET state_json=excluded.state_json, updated_at=excluded.updated_at",
-      ).run(
-        sourceId,
-        source.capability_id,
-        "rev_1",
-        JSON.stringify(result.next_state),
-        new Date().toISOString(),
-      );
-    }
+    const retryAfter = result.errors.find((error) => error.retry_after_seconds)?.retry_after_seconds;
+    if (result.status !== "failed" && result.next_state)
+      saveState(sourceId, source.capability_id, result.next_state);
+    // A cooldown is stored beside, never instead of, the unadvanced scan checkpoint.
+    if (result.status === "failed" && retryAfter)
+      saveState(sourceId, source.capability_id, { ...state, cooldown_until: new Date(Date.now() + retryAfter * 1000).toISOString() });
     // Even a 304 or failed feed request must not strand already discovered work.
     const enriched = await this.drain(
       source,
@@ -255,9 +282,10 @@ export class CollectionService {
     const linked = canonical ? db.prepare(`SELECT id FROM articles WHERE canonical_url=? UNION ALL SELECT article_id id FROM collection_candidates WHERE json_extract(item_json,'$.canonical_url')=? LIMIT 1`).get(canonical,canonical) as {id:string}|undefined : undefined;
     const articleId = existingArticleId || prior?.article_id || linked?.id || `art_${crypto.randomUUID()}`;
     let decision = evaluateContent(item, options, timezone);
-    if (prior && terminalStates.has(prior.status) && !item.body.value && !['history','excluded'].includes(decision.status)) decision={...decision,status:'pending',reason:'queued'};
+    if (prior && terminalStates.has(prior.status) && !item.body.value && !isPlatformPost(item) && !['history','excluded'].includes(decision.status)) decision={...decision,status:'pending',reason:'queued'};
     if (
       item.fetch_method !== "web_page" &&
+      !isPlatformPost(item) &&
       ["date_unknown", "future_date", "date_conflict"].includes(decision.reason)
     )
       decision = { ...decision, status: "pending", reason: "queued" };
@@ -341,7 +369,7 @@ export class CollectionService {
         item.canonical_url || item.final_url || item.original_url,
       );
       const adapter = collectorRegistry.get("web_page");
-      if (!adapter || !url) {
+      if (!adapter || !url || isPlatformPost(item)) {
         db.prepare(
           "UPDATE collection_candidates SET status='review',reason='body_invalid' WHERE source_id=? AND item_id=?",
         ).run(source.id, candidate.item_id);

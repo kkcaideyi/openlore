@@ -1,0 +1,55 @@
+# X 接入测试报告
+
+日期：2026-10-25。对应 [测试计划](04-test-plan.md)；实现为 twscrape 直连 `x_user` 来源（选型见 [AGENT-HANDOFF.md](AGENT-HANDOFF.md) 第 14 节），RSSHub 路线未实现，计划中 RSS/私网例外相关条目不适用。
+
+## 环境
+
+Windows 11，公司 HTTPS 代理；Python 3.13（uv venv），twscrape 0.20.1；Node 22（Node 24 无 better-sqlite3 预编译包）。X 会话由用户经 `accounts add` 隐藏输入导入，未进入对话、日志或 Git。
+
+## 离线测试
+
+| 套件 | 结果 | 覆盖 |
+| --- | --- | --- |
+| Python `pytest` | 17 通过 | 规范化与过滤（转帖、回复他人、混入的他人帖）、水位与置顶、预算续扫、首扫不回填、改名重置、partial、软截止、空时间线、会话错误分类、CLI 进程 |
+| server `x-source.test.ts` | 10 通过 | 主页解析与别名、帖子映射与日期冲突、准入、Windows venv 路径、子进程环境与脱敏、真实拉起 worker、请求预算、10 次轮询幂等、partial 保存续扫、限流冷却阻断调度/手动/预览 |
+| server 全量 | 246 通过 / 25 失败 | 25 项改动前即失败（Windows AI 执行器用例），无新增失败 |
+| typecheck / web | 通过 | contracts、server、web 类型检查；web build 与 34 项测试 |
+
+另用 twscrape 仓库的真实接口样本校验解析：22 条本人条目排除 13 条转帖得 9 条原创，引用帖保留原作者。
+
+## 真实取数（P0）
+
+账号：@simonw、@karpathy、@swyx；默认来源策略（30 天窗口、仅当年）。
+
+| 项 | 结果 |
+| --- | --- |
+| 预览（@simonw） | 1 页，16 条，4.5 秒，未写入数据 |
+| 首次同步 | 每账号 2–4 次请求（1 次用户查询 + 1–3 页），`scan=limited`，不回填更早历史 |
+| 日期核验 | 133 条候选发布时间全部与 Snowflake ID 一致，无冲突 |
+| 内容 | t.co 外链已展开；引用帖带原作者与原文；长帖全文 |
+| 准入 | 入池 78；待复核 4（仅图片或仅链接）；窗口外 50；2020 年置顶帖按 `previous_year` 排除 |
+| 增量 | 再次同步 0 条，`scan=complete`，水位不变 |
+| 会话 | 共 20 次请求后状态“可用”，未触发限流 |
+
+## 发现的问题
+
+| 问题 | 影响 | 处理 |
+| --- | --- | --- |
+| 增量同步时水位以下旧帖仍随首页返回 | 仅被判重拦下，无错误入池，但每轮重复评估 | 采集端过滤 `id <= stop_id`，补测试；真实复测返回 0 条 |
+
+## 未验证
+
+- 3 来源 30 分钟轮询连续 48 小时，及期间新帖增量入池。
+- 真实限流/会话失效触发后的冷却与恢复。
+- 入池帖子的初审、研读、归档端到端链路。
+
+## 复现
+
+```bash
+cd workers/python
+uv sync --extra x
+uv run python -m openlore_collectors.x_user.accounts add <标签>   # 提示后粘贴 Cookie
+uv run pytest -q
+```
+
+服务端在来源页添加“X 账号”来源后预览、同步；离线测试：`apps/server` 下 `vitest run test/x-source.test.ts`。

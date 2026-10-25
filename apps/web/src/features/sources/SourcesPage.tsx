@@ -1,9 +1,9 @@
 import { RepositoryHistory } from './RepositoryHistory.js';
 import React, { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Clock, ExternalLink, Github, Globe, Pencil, Plus, RefreshCw, Rss, X } from 'lucide-react';
+import { AtSign, Clock, ExternalLink, Github, Globe, Pencil, Plus, RefreshCw, Rss, X } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { parseGitHubRepository, sourceSupportsTask } from '@openlore/contracts';
+import { parseGitHubRepository, parseXProfile, sourceSupportsTask } from '@openlore/contracts';
 import type { Source } from '@openlore/contracts';
 import { Badge } from '../../components/ui/badge.js';
 import { Button, cn } from '../../components/ui/button.js';
@@ -18,6 +18,17 @@ import { Input } from '../../components/ui/input.js';
 import { api } from '../../lib/api.js';
 import { useDialog } from '../../lib/useDialog.js';
 
+const SOURCE_TYPES = [
+  { id: 'web_feed', label: 'RSS / Atom', icon: Rss, urlLabel: 'Feed URL *', placeholder: 'https://example.com/feed.xml' },
+  { id: 'x_user', label: 'X 账号', icon: AtSign, urlLabel: 'X 账号主页 *', placeholder: 'https://x.com/simonw' },
+  { id: 'github_repository', label: 'GitHub 仓库', icon: Github, urlLabel: 'GitHub 仓库地址 *', placeholder: 'https://github.com/stablyai/orca' },
+];
+const sourceTypeOf = (id: string) => SOURCE_TYPES.find(type => type.id === id) || SOURCE_TYPES[0];
+function SourceTypeIcon({ id, className }: { id: string; className: string }) {
+  const Icon = sourceTypeOf(id).icon;
+  return <Icon className={className} />;
+}
+
 export function SourcesPage() {
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -28,10 +39,11 @@ export function SourcesPage() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeType, setActiveType] = useState('web_feed');
-  const [sourceType, setSourceType] = useState('web_feed');
+  const [formType, setFormType] = useState('web_feed');
   const [researchFocus, setResearchFocus] = useState('');
   const { data: groups } = useQuery({ queryKey: ['groups'], queryFn: api.listGroups });
-  const isRepository = sourceType === 'github_repository';
+  const isRepository = formType === 'github_repository';
+  const isX = formType === 'x_user';
   useDialog(isModalOpen, () => setIsModalOpen(false));
   const [editingSource, setEditingSource] = useState<Source | null>(null);
   const [pollMsg, setPollMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -120,7 +132,7 @@ export function SourcesPage() {
   const saveMutation = useMutation({
     mutationFn: api.saveSource,
     onSuccess: () => {
-      setActiveType(sourceType);
+      setActiveType(formType);
       queryClient.invalidateQueries({ queryKey: ['sources'] });
       setIsModalOpen(false);
       setEditingSource(null);
@@ -132,7 +144,7 @@ export function SourcesPage() {
   });
 
   const handleOpenCreate = () => {
-    setSourceType(activeType);
+    setFormType(activeType);
     setResearchFocus('');
     setEditingSource(null);
     saveMutation.reset();
@@ -149,7 +161,7 @@ export function SourcesPage() {
   };
 
   const handleOpenEdit = (source: Source) => {
-    setSourceType(source.capability_id);
+    setFormType(source.capability_id);
     setResearchFocus(source.options.research_focus);
     setEditingSource(source);
     saveMutation.reset();
@@ -180,7 +192,7 @@ export function SourcesPage() {
       name: name.trim(),
       url: url.trim(),
       description: description.trim(),
-      capability_id: sourceType,
+      capability_id: formType,
       options: { research_focus: researchFocus, max_age_days:maxAgeDays, current_year_only:currentYearOnly, verify_publication_date:verifyDate, keyword_policy:keywordPolicy, excluded_categories:excludedCategories.split(/[,，]/).map(x=>x.trim()).filter(Boolean), poll_interval_mins: pollInterval, keywords: keywords.split(/[,，]/).map((x) => x.trim()).filter(Boolean), excluded_keywords: excludedKeywords.split(/[,，]/).map((x) => x.trim()).filter(Boolean), keyword_mode: keywordMode },
       enabled,
     });
@@ -241,7 +253,7 @@ export function SourcesPage() {
       {(sourcesError || toggleMutation.error) && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{sourcesError?.message || toggleMutation.error?.message}</p>}
       {/* Tabs */}
       <div role="tablist" aria-label="来源类型" className="flex items-center space-x-2 border-b border-neutral-200">
-        {[{ id: 'web_feed', label: 'RSS / Atom', icon: Rss }, { id: 'github_repository', label: 'GitHub 仓库', icon: Github }].map(type => (
+        {SOURCE_TYPES.map(type => (
           <button key={type.id} role="tab" aria-selected={activeType === type.id} onClick={() => setActiveType(type.id)} className={cn('flex items-center gap-2 py-2.5 px-4 text-sm font-semibold border-b-2 -mb-px', activeType === type.id ? 'border-neutral-900 text-neutral-900' : 'border-transparent text-neutral-500')}>
             <type.icon className="h-4 w-4" />{type.label}
             <span className="text-xs rounded-full bg-neutral-100 px-2 py-0.5">{sources?.filter(source => source.capability_id === type.id).length || 0}</span>
@@ -249,12 +261,13 @@ export function SourcesPage() {
         ))}
       </div>
       {activeType === 'github_repository' && <p className="rounded-lg border bg-neutral-50 p-3 text-xs text-neutral-600">按目标研读源码，结合历史研报持续深入。在<Link to="/pipelines" className="underline">流水线</Link>中设置运行时间与归档目录。</p>}
+      {activeType === 'x_user' && <p className="rounded-lg border bg-neutral-50 p-3 text-xs text-neutral-600">采集指定账号的原创帖与引用帖（不含转帖和对他人的回复），需先在控制端导入 X 会话，见 workers/python/README.md。</p>}
 
       {/* Responsive Multi-column Cards Grid */}
       {isLoading ? <p role="status" className="p-12 text-center text-sm text-neutral-500">正在加载信息源…</p> : visibleSources.length === 0 ? (
         <Card className="p-12 text-center text-neutral-500 border-dashed">
           <Rss className="mx-auto h-8 w-8 text-neutral-300 mb-2" />
-          <p className="text-sm font-medium">当前暂无{activeType === 'github_repository' ? ' GitHub 仓库' : ' RSS / Atom 信息源'}</p>
+          <p className="text-sm font-medium">当前暂无 {sourceTypeOf(activeType).label} 信息源</p>
           <p className="text-xs text-neutral-400 mt-1">点击右上角“新增信息源”即可添加。</p>
         </Card>
       ) : (
@@ -269,7 +282,7 @@ export function SourcesPage() {
                 <div className="flex items-start justify-between gap-2.5 p-4 sm:p-5 pb-3">
                   <div className="flex items-center space-x-3 min-w-0 flex-1">
                     <div className="h-10 w-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0 text-amber-600">
-                      {s.capability_id === 'github_repository' ? <Github className="h-5 w-5" /> : <Rss className="h-5 w-5" />}
+                      <SourceTypeIcon id={s.capability_id} className="h-5 w-5" />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center space-x-1.5">
@@ -277,7 +290,7 @@ export function SourcesPage() {
                           {s.name}
                         </h3>
                         <span className="text-[10px] sm:text-[11px] font-medium px-1.5 sm:px-2 py-0.5 rounded-full bg-neutral-100 text-neutral-600 border border-neutral-200/60 shrink-0">
-                          {s.capability_id === 'github_repository' ? 'GitHub 仓库' : 'RSS / Atom'}
+                          {sourceTypeOf(s.capability_id).label}
                         </span>
                       </div>
                       <p className="text-xs text-neutral-500 line-clamp-1 mt-0.5" title={s.description}>
@@ -433,7 +446,7 @@ export function SourcesPage() {
                   {editingSource ? '编辑信息源配置' : '新增信息源'}
                 </h3>
                 <Badge variant="outline" className="text-xs text-amber-700 bg-amber-50 border-amber-200">
-                  {isRepository ? 'GitHub 仓库' : 'RSS / Atom'}
+                  {sourceTypeOf(formType).label}
                 </Badge>
               </div>
               <button
@@ -445,8 +458,8 @@ export function SourcesPage() {
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               <label className="block space-y-1 text-xs">来源类型
-                <select className="w-full rounded border p-2" value={sourceType} disabled={Boolean(editingSource)} onChange={event => { setSourceType(event.target.value); setPollInterval(event.target.value === 'github_repository' ? 60 : 30); }}>
-                  <option value="web_feed">RSS / Atom</option><option value="github_repository">GitHub 仓库</option>
+                <select className="w-full rounded border p-2" value={formType} disabled={Boolean(editingSource)} onChange={event => { setFormType(event.target.value); setPollInterval(event.target.value === 'github_repository' ? 60 : 30); }}>
+                  {SOURCE_TYPES.map(type => <option key={type.id} value={type.id}>{type.label}</option>)}
                 </select>
               </label>
               <div className="space-y-1.5">
@@ -458,9 +471,9 @@ export function SourcesPage() {
                 />
               </div>
               <div className="space-y-1.5">
-                <label htmlFor="source-url" className="text-xs font-medium text-neutral-700">{isRepository ? 'GitHub 仓库地址 *' : 'Feed URL *'}</label>
+                <label htmlFor="source-url" className="text-xs font-medium text-neutral-700">{sourceTypeOf(formType).urlLabel}</label>
                 <Input
-                  id="source-url" type="url" required disabled={Boolean(editingSource && isRepository)} placeholder={isRepository ? 'https://github.com/stablyai/orca' : 'https://example.com/feed.xml'}
+                  id="source-url" type="url" required disabled={Boolean(editingSource && isRepository)} placeholder={sourceTypeOf(formType).placeholder}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                 />
@@ -486,7 +499,8 @@ export function SourcesPage() {
                 <Input type="number" min={1} max={3650} value={maxAgeDays} onChange={e=>setMaxAgeDays(Number(e.target.value))} />
               </label>
               <label className="flex gap-2 text-xs"><input type="checkbox" checked={currentYearOnly} onChange={e=>setCurrentYearOnly(e.target.checked)} />只自动采集今年首发文章</label>
-              <label className="flex gap-2 text-xs"><input type="checkbox" checked={verifyDate} onChange={e=>setVerifyDate(e.target.checked)} />用原文核验首发日期</label>
+              {isX ? <p className="text-[11px] text-neutral-500">发帖时间取自 X 接口并以帖子 ID 内嵌时间交叉核验；不回抓 X 网页。正文去除链接后不足 40 字的帖子留待复核。</p>
+                : <label className="flex gap-2 text-xs"><input type="checkbox" checked={verifyDate} onChange={e=>setVerifyDate(e.target.checked)} />用原文核验首发日期</label>}
               <label className="block space-y-1 text-xs">关键词作用
                 <select className="w-full rounded border p-2" value={keywordPolicy} onChange={e=>setKeywordPolicy(e.target.value as 'assist'|'strict')}><option value="assist">辅助：允许工程主题补充命中，未命中留待复核</option><option value="strict">严格：必须匹配配置的关键词</option></select>
               </label>
@@ -527,7 +541,7 @@ export function SourcesPage() {
               </Button>
               <Button
                 type="submit"
-                disabled={(isRepository ? !parseGitHubRepository(url) : !Number.isInteger(maxAgeDays) || maxAgeDays<1 || maxAgeDays>3650) || !name.trim() || !url.trim() || !Number.isInteger(pollInterval) || pollInterval < 1 || pollInterval > 10080 || saveMutation.isPending}
+                disabled={(isRepository ? !parseGitHubRepository(url) : (isX && !parseXProfile(url)) || !Number.isInteger(maxAgeDays) || maxAgeDays<1 || maxAgeDays>3650) || !name.trim() || !url.trim() || !Number.isInteger(pollInterval) || pollInterval < 1 || pollInterval > 10080 || saveMutation.isPending}
               >
                 {saveMutation.isPending ? '保存中...' : editingSource ? '保存变更' : '确认保存'}
               </Button>

@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { repositoryStudy } from '@openlore/contracts';
+import { repositoryStudy, xStatusId } from '@openlore/contracts';
 import { hasReviewableBody } from "../../infrastructure/content/review-body.js";
 import type {
   ContentItem,
@@ -37,6 +37,8 @@ export function normalizeUrl(raw: string | null | undefined): string | null {
   try {
     const url = new URL(raw);
     if (!["http:", "https:"].includes(url.protocol)) return null;
+    const status = xStatusId(url);
+    if (status) return `https://x.com/i/status/${status}`;
     url.hash = "";
     for (const key of [...url.searchParams.keys()])
       if (/^(utm_|fbclid$|gclid$)/i.test(key)) url.searchParams.delete(key);
@@ -107,6 +109,10 @@ export function matchesSourceKeywords(
       : hits.length > 0)
   );
 }
+/** Posts come from a structured platform API; fetching their web page cannot add a body or date. */
+export function isPlatformPost(item: ContentItem): boolean {
+  return item.fetch_method === "x_user";
+}
 export function ruleRevision(options: SourceOptions): string {
   return crypto
     .createHash("sha256")
@@ -161,18 +167,20 @@ export function evaluateContent(
     )
   )
     return done("excluded", "excluded_category");
+  const post = isPlatformPost(item);
   if (options.verify_publication_date && !item.date_evidence?.verified)
-    return done("pending", "queued");
+    return post ? done("review", "date_unknown") : done("pending", "queued");
   const text =
     `${item.title || ""} ${plainText(item.body.value)}`.toLowerCase();
   if (options.excluded_keywords.some((word) => containsTerm(text, word)))
     return done("excluded", "excluded_keyword");
   const body = plainText(item.body.value);
   if (!item.title || item.body.completeness !== "full")
-    return done("pending", "body_missing");
+    return post ? done("review", "body_invalid") : done("pending", "body_missing");
+  // Short posts are admitted on substance; links do not count toward their length.
   if (
     !hasReviewableBody(item.body.value, item.title || "") ||
-    body.length < 80 ||
+    (post ? body.replace(/https?:\/\/\S+/g, "").trim().length < 40 : body.length < 80) ||
     /^(access denied|just a moment|page not found|sign in to continue|403 forbidden|404 not found)/i.test(
       body,
     )

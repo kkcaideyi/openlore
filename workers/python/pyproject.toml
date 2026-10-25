@@ -10,6 +10,11 @@ dependencies = [
     "jsonschema>=4.23.0",
 ]
 
+[project.optional-dependencies]
+x = [
+    "twscrape==0.20.1",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.0.0",

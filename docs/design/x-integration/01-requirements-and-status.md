@@ -1,6 +1,8 @@
 # X 接入：当前需求与进展
 
-更新日期：2026-10-23（Asia/Shanghai）。
+完整汇总与最新路线判断见 [Agent 交接文档](AGENT-HANDOFF.md)，涵盖 RSSHub 与开源 Python 直连评估。
+
+更新日期：2026-10-24（Asia/Shanghai）。
 
 ## 目标与协作方式
 
@@ -13,7 +15,7 @@
 | 个人 Fork / origin | `git@github.com:kkcaideyi/openlore.git` |
 | 原仓库 / upstream | `git@github.com:decent-yu/openlore.git` |
 | 工作目录 | `D:\Project\openlore`，沿用现有检出目录，不另建工作树 |
-| 分支 | `ykzhu14/接入x` |
+| 分支 | `ykzhu14/access_x`（2026-10-24 实际检出；沿用当前名称） |
 | 创建基线 | Fork 的 `origin/main`，`926347d5f17943847d639b75c8f9349780efcd6e` |
 | 开发方式 | 在现有目录切换需求分支，`main` 分支保留 |
 
@@ -49,6 +51,8 @@
 
 上述文档于 2026-10-23 在线读取，未固定上游源码快照，也未使用真实 X 账号进行测试。“开源”和“无需官方 API Key”不表示无需账号、无需维护或一定稳定。
 
+2026-10-24 补充：已成功读取 RSSHub `twitter/user.ts`、`namespace.ts`、`api/index.ts`，确认用户时间线路由存在，认证可走 Web Cookie 或开发者 API。此前路由未确认的记录为历史状态；最新证据和实施方案见 [上下文](01-context-brief.md)、[方案比较](02-options.md)、[详细设计](03-design.md)与[测试计划](04-test-plan.md)。实际采集仍未验证。
+
 ## 首轮验证建议范围
 
 下面是待验证的最小范围，不视为已经批准的开发方案：
@@ -77,7 +81,7 @@
 - 用户已创建个人 Fork，本地 `origin` 指向 `kkcaideyi/openlore`，`upstream` 指向原项目。
 - 已建立本需求分支，在 `D:\Project\openlore` 集中保存总体分析和本需求记录；不使用单独工作树。
 - 未安装第三方采集器、部署 RSS 服务、采集真实 X 数据或启动业务验证。
-- 两份文档已提交到需求分支；未修改应用源码、推送分支或创建 PR。
+- 两份原始文档已提交到需求分支；2026-10-24 本地可见该分支跟踪 origin 同名分支且 HEAD 一致。后续方案文档尚未提交；未修改应用源码或创建 PR。
 
 ## 下一步与待确定事项
 

@@ -10,6 +10,7 @@ export const SourceCapabilitySchema = z.enum([
   'web_page',
   'github_api',
   'github_repository',
+  'x_user',
   'platform',
 ]);
 export type SourceCapability = z.infer<typeof SourceCapabilitySchema>;

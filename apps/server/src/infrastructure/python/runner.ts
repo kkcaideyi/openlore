@@ -10,6 +10,44 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// The worker gets only what Python and outbound proxies need, never control-plane secrets.
+const INHERITED_ENV = new Set([
+  'PATH', 'PATHEXT', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'TEMP', 'TMP', 'TMPDIR', 'HOME', 'USERPROFILE',
+  'LOCALAPPDATA', 'APPDATA', 'LANG', 'LC_ALL', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'TWS_PROXY',
+]);
+
+export function workerEnv(source: NodeJS.ProcessEnv, pythonPath: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source))
+    if (value !== undefined && INHERITED_ENV.has(key.toUpperCase())) env[key] = value;
+  return {
+    ...env,
+    PYTHONUNBUFFERED: '1',
+    PYTHONIOENCODING: 'utf-8',
+    PYTHONPATH: pythonPath,
+    TWS_TELEMETRY: '0',
+    DO_NOT_TRACK: '1',
+  };
+}
+
+/** Diagnostics may contain upstream responses; keep a short tail and mask credential-looking values. */
+export function redactDiagnostics(text: string): string {
+  return text
+    .slice(-500)
+    .replace(/((?:auth_token|ct0|cookie|authorization|password|token)["']?\s*[:=]\s*["']?)[^\s"';,]+/gi, '$1***')
+    .replace(/\b[a-f0-9]{40,}\b/gi, '***');
+}
+
+export function resolvePythonPath(projectDir: string, platform = process.platform): string {
+  const venvPython = platform === 'win32'
+    ? path.join(projectDir, '.venv', 'Scripts', 'python.exe')
+    : path.join(projectDir, '.venv', 'bin', 'python');
+  if (fs.existsSync(venvPython)) return venvPython;
+  // On Windows `python3` is usually the Microsoft Store stub.
+  return platform === 'win32' ? 'python' : 'python3';
+}
+
 export class PythonWorkerRunner {
   private pythonPath: string;
   private pythonProjectDir: string;
@@ -19,17 +57,9 @@ export class PythonWorkerRunner {
     // from apps/server/src/infrastructure/python -> up 4 levels to root
     const repoRoot = path.resolve(__dirname, '../../../../../');
     this.pythonProjectDir = path.join(repoRoot, 'workers/python');
-
-    if (customPythonPath && fs.existsSync(customPythonPath)) {
-      this.pythonPath = customPythonPath;
-    } else {
-      const venvPython = path.join(this.pythonProjectDir, '.venv/bin/python');
-      if (fs.existsSync(venvPython)) {
-        this.pythonPath = venvPython;
-      } else {
-        this.pythonPath = 'python3';
-      }
-    }
+    this.pythonPath = customPythonPath && fs.existsSync(customPythonPath)
+      ? customPythonPath
+      : resolvePythonPath(this.pythonProjectDir);
   }
 
   getPythonPath(): string {
@@ -45,11 +75,7 @@ export class PythonWorkerRunner {
       const child = spawn(this.pythonPath, args, {
         cwd: this.pythonProjectDir,
         shell: false,
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: '1',
-          PYTHONPATH: path.join(this.pythonProjectDir, 'src'),
-        },
+        env: workerEnv(process.env, path.join(this.pythonProjectDir, 'src')),
       });
 
       let stdoutData = '';
@@ -79,7 +105,7 @@ export class PythonWorkerRunner {
       });
 
       child.stderr.on('data', (chunk) => {
-        stderrData += chunk.toString('utf-8');
+        stderrData = (stderrData + chunk.toString('utf-8')).slice(-8192);
       });
 
       child.on('error', (err) => {
@@ -92,7 +118,7 @@ export class PythonWorkerRunner {
         if (code !== 0) {
           return reject(
             new Error(
-              `Python worker exited with code ${code}. Stderr: ${stderrData}`,
+              `Python worker exited with code ${code}. Stderr: ${redactDiagnostics(stderrData)}`,
             ),
           );
         }
@@ -110,7 +136,7 @@ export class PythonWorkerRunner {
         } catch (e: any) {
           reject(
             new Error(
-              `Failed to parse worker stdout as JSON: ${e.message}. Raw output: ${stdoutData.slice(0, 500)}`,
+              `Failed to parse worker stdout as JSON: ${e.message}. Raw output: ${redactDiagnostics(stdoutData.slice(0, 500))}`,
             ),
           );
         }

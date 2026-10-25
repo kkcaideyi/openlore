@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { repositoryStudyService } from '../repository-study/service.js';
 import { z } from 'zod';
 import { eq } from 'drizzle-orm';
-import { SourceCapabilitySchema, SourceOptionsSchema, parseGitHubRepository, type Source } from '@openlore/contracts';
+import { SourceCapabilitySchema, SourceOptionsSchema, parseGitHubRepository, parseXProfile, type Source } from '@openlore/contracts';
 import { getDb, getSqliteDatabase } from '../../infrastructure/persistence/sqlite/db.js';
 import { sourcesTable, sourceStatesTable } from '../../infrastructure/persistence/sqlite/schema.js';
 
@@ -74,6 +74,10 @@ export class SourcesService {
       const repository = parseGitHubRepository(url);
       z.string().refine(value => Boolean(parseGitHubRepository(value)), '请输入 GitHub 仓库地址，例如 https://github.com/stablyai/orca').parse(url);
       url = repository!.url;
+    }
+    if (capability === 'x_user') {
+      z.string().refine(value => Boolean(parseXProfile(value)), '请输入 X 账号主页，例如 https://x.com/simonw').parse(url);
+      url = parseXProfile(url)!.url;
     }
     const options = SourceOptionsSchema.parse(data.options ?? previous?.options ?? (capability === 'github_repository' ? { poll_interval_mins: 60 } : {}));
     if (previous?.capability_id === 'github_repository' && previous.url !== url)
