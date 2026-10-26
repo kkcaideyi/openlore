@@ -63,6 +63,17 @@ function saveState(sourceId: string, capabilityId: string, state: Record<string,
   ).run(sourceId, capabilityId, "rev_1", JSON.stringify(state), new Date().toISOString());
 }
 
+/** A failed request that names a retry delay (rate limit) puts the source into cooldown. */
+function recordCooldown(sourceId: string, capabilityId: string, result: CollectionResult): void {
+  const retryAfter = result.errors.find((error) => error.retry_after_seconds)?.retry_after_seconds;
+  if (result.status !== "failed" || !retryAfter) return;
+  const until = new Date(Date.now() + retryAfter * 1000).toISOString();
+  // Only the marker is written, so the unadvanced scan checkpoint beside it stays intact.
+  getSqliteDatabase().prepare(
+    "INSERT INTO source_states(source_id, capability_id, revision, state_json, updated_at) VALUES (?, ?, 'rev_1', json_object('cooldown_until', ?), ?) ON CONFLICT(source_id, capability_id, revision) DO UPDATE SET state_json=json_set(source_states.state_json, '$.cooldown_until', json_extract(excluded.state_json, '$.cooldown_until')), updated_at=excluded.updated_at",
+  ).run(sourceId, capabilityId, until, new Date().toISOString());
+}
+
 /** Upstream cooldown (rate limit) blocks every entry point, including previews and forced polls. */
 export function sourceCooldown(sourceId: string, capabilityId: string): string | null {
   const until = savedState(sourceId, capabilityId)?.cooldown_until;
@@ -98,6 +109,7 @@ export class CollectionService {
     const previewRequest = this.request(source, previewId, null, 10);
     previewRequest.options = { ...previewRequest.options, timezone };
     const result = await adapter.collect(previewRequest);
+    recordCooldown(source.id, source.capability_id, result);
     const counts: Record<string, number> = {};
     for (const item of result.items) {
       const decision = evaluateContent(item, source.options, timezone);
@@ -167,12 +179,9 @@ export class CollectionService {
       counts[reason] = (counts[reason] || 0) + 1;
       if (reason === "ready") newlyReady++;
     }
-    const retryAfter = result.errors.find((error) => error.retry_after_seconds)?.retry_after_seconds;
     if (result.status !== "failed" && result.next_state)
       saveState(sourceId, source.capability_id, result.next_state);
-    // A cooldown is stored beside, never instead of, the unadvanced scan checkpoint.
-    if (result.status === "failed" && retryAfter)
-      saveState(sourceId, source.capability_id, { ...state, cooldown_until: new Date(Date.now() + retryAfter * 1000).toISOString() });
+    recordCooldown(sourceId, source.capability_id, result);
     // Even a 304 or failed feed request must not strand already discovered work.
     const enriched = await this.drain(
       source,

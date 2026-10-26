@@ -228,4 +228,20 @@ describe('X source collection', () => {
     expect(run.mock.calls[1][0]).toMatchObject({ state: before });
     expect(run.mock.calls[1][0]).not.toHaveProperty('state.cooldown_until');
   });
+
+  it('puts the source into cooldown when a preview is rate limited, without touching the checkpoint', async () => {
+    const db = getSqliteDatabase();
+    const stateOf = () => JSON.parse((db.prepare("SELECT state_json FROM source_states WHERE source_id='x'").get() as { state_json: string }).state_json);
+    const { cooldown_until: _old, ...before } = stateOf();
+    const run = vi.spyOn(pythonWorkerRunner, 'run').mockResolvedValue({
+      protocol_version: 1, job_id: 'j', status: 'failed', issues: [], data: null,
+      error: { code: 'x_rate_limited', message: 'X 会话限流或被占用，约 5 分钟后重试', retryable: true, retry_after_seconds: 300 },
+    });
+    expect((await collectionService.previewSource('x')).errors[0].code).toBe('x_rate_limited');
+    const saved = stateOf();
+    expect(saved).toMatchObject(before);
+    expect(Date.parse(saved.cooldown_until) - Date.now()).toBeGreaterThan(290_000);
+    expect((await collectionService.discoverSource('x')).errors[0].code).toBe('cooldown');
+    expect(run).toHaveBeenCalledTimes(1);
+  });
 });
