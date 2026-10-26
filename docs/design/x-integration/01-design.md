@@ -50,7 +50,7 @@ flowchart LR
 - 只有扫到 `stop_id`（上次水位）或时间线到底才算完成（`scan=complete`），这时把水位推进到本轮最大 ID。
 - 页数预算用完但没扫完（`scan=more`）：保存 `pending`，水位不动，下次从 cursor 续扫。调度器把 `pending.cursor` 当作待续工作。
 - 首次扫描（无水位）只取预算内的页，不回填更早的历史（`scan=limited`）。
-- 置顶帖不参与水位计算；`id <= stop_id` 的旧帖在采集端直接过滤。
+- 置顶帖计入水位但不触发“到达上次位置”的判断（它排在最前、不按时间序）；`id <= stop_id` 的旧帖在采集端直接过滤。
 - 账号 ID 变了（同名账号已换人）时清空状态，并上报 `x_user_changed`。
 - 部分页成功后出错或超时：返回 `partial`，带已取结果和对应状态，由服务端照常落库。
 - 首页为空判为失败（`x_empty_timeline`，twscrape 被拦截时也是空页）；续扫为空视为结束，上报 `x_continuation_empty`。
@@ -68,7 +68,7 @@ flowchart LR
 | `x_user_unavailable` / `x_empty_timeline` | 账号不可读或被拦截 | 是 |
 | `x_timeout` / `x_collect_error` / `x_api_changed` / `x_dependency_missing` | 其他 | 视情况 |
 
-正式同步和预览返回的失败结果只要带 `retry_after_seconds`，就在 `source_states` 写入 `cooldown_until`。写入用 `json_set`，只改这一个字段，不覆盖、也不推进扫描水位。冷却期内调度（含强制）、手动同步、预览都直接返回 `cooldown`，不启动子进程。冷却过期后，发给采集器的状态里会去掉这个标记。
+正式同步和预览的结果（失败或部分成功）只要带 `retry_after_seconds`，就在 `source_states` 写入 `cooldown_until`。写入用 `json_set`，只改这一个字段，不覆盖、也不推进扫描水位。冷却期内调度（含强制）、手动同步、预览都直接返回 `cooldown`，不启动子进程。冷却过期后，发给采集器的状态里会去掉这个标记。
 
 ## 帖子到 ContentItem
 

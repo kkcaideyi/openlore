@@ -17,6 +17,15 @@ pnpm build
 workers/python/.venv/bin/python -c "import feedparser, trafilatura, jsonschema; print('Python dependencies OK')"
 ```
 
+需要 X 账号来源时另装可选依赖并导入已授权账号的会话 Cookie（含 `auth_token` 和 `ct0`；从标准输入或隐藏提示读取，不写进命令行）：
+
+```sh
+uv sync --project workers/python --python 3.12 --locked --extra x
+OPENLORE_DATA_DIR=/var/lib/openlore workers/python/.venv/bin/python -m openlore_collectors.x_user.accounts add <登录名>
+```
+
+会话保存在 `$OPENLORE_DATA_DIR/x/accounts.db`，只由控制服务读取。该方式使用登录会话访问 X，请自行评估账号风险。
+
 服务器通过 Runner 执行 AI 时无需安装或登录 AI CLI。Python 依赖要在启动前准备好；后端按需启动解析子进程，无需手动常驻 Python 服务。
 
 ## 2. 配置与启动
