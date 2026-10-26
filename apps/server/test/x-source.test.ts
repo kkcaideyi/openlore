@@ -229,6 +229,21 @@ describe('X source collection', () => {
     expect(run.mock.calls[1][0]).not.toHaveProperty('state.cooldown_until');
   });
 
+  it('keeps partial results and still enters cooldown when the rate limit hits mid-scan', async () => {
+    const pending = { cursor: 'c9', top_id: post(1).id, stop_id: post(5).id };
+    const run = vi.spyOn(pythonWorkerRunner, 'run').mockResolvedValue({
+      ...workerResult([post(1)], { user_id: '1', newest_id: post(5).id, pending }, 'partial'),
+      error: { code: 'x_rate_limited', message: '限流', retryable: true, retry_after_seconds: 120 },
+    } as any);
+    expect((await collectionService.discoverSource('x')).status).toBe('partial');
+    const saved = JSON.parse((getSqliteDatabase().prepare("SELECT state_json FROM source_states WHERE source_id='x'").get() as { state_json: string }).state_json);
+    expect(saved.pending).toEqual(pending);
+    expect(Date.parse(saved.cooldown_until) - Date.now()).toBeGreaterThan(110_000);
+    expect((await collectionService.discoverSource('x')).errors[0].code).toBe('cooldown');
+    expect(run).toHaveBeenCalledTimes(1);
+    getSqliteDatabase().prepare("UPDATE source_states SET state_json=json_set(state_json,'$.cooldown_until','2000-01-01T00:00:00Z') WHERE source_id='x'").run();
+  });
+
   it('puts the source into cooldown when a preview is rate limited, without touching the checkpoint', async () => {
     const db = getSqliteDatabase();
     const stateOf = () => JSON.parse((db.prepare("SELECT state_json FROM source_states WHERE source_id='x'").get() as { state_json: string }).state_json);

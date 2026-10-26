@@ -63,10 +63,10 @@ function saveState(sourceId: string, capabilityId: string, state: Record<string,
   ).run(sourceId, capabilityId, "rev_1", JSON.stringify(state), new Date().toISOString());
 }
 
-/** A failed request that names a retry delay (rate limit) puts the source into cooldown. */
+/** Any result that names a retry delay (rate limit), failed or partial, puts the source into cooldown. */
 function recordCooldown(sourceId: string, capabilityId: string, result: CollectionResult): void {
   const retryAfter = result.errors.find((error) => error.retry_after_seconds)?.retry_after_seconds;
-  if (result.status !== "failed" || !retryAfter) return;
+  if (!retryAfter) return;
   const until = new Date(Date.now() + retryAfter * 1000).toISOString();
   // Only the marker is written, so the unadvanced scan checkpoint beside it stays intact.
   getSqliteDatabase().prepare(

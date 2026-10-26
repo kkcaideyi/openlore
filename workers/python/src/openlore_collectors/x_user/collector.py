@@ -236,8 +236,10 @@ async def _collect(req: XUserRequest, api: Any) -> WorkerResponse:
                 if tweet.user.id != user.id:
                     continue
                 is_pinned = tweet.id in pinned
+                # A pinned post sits out of order, so it never signals that the watermark was reached,
+                # but it still raises the watermark: otherwise a newly pinned post is re-delivered every scan.
+                top_id = max(top_id, tweet.id)
                 if not is_pinned:
-                    top_id = max(top_id, tweet.id)
                     reached = reached or (stop_id is not None and tweet.id <= stop_id)
                 known = stop_id is not None and tweet.id <= stop_id
                 if known or tweet.retweetedTweet or replies_to_other(tweet, user):

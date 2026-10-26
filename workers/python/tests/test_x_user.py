@@ -160,6 +160,19 @@ def test_stops_at_watermark_and_keeps_pinned_out_of_boundary():
     assert api.closed
 
 
+def test_newly_pinned_post_raises_watermark_and_is_not_redelivered():
+    pinned = gql_tweet(post_id(1), AUTHOR, "Just pinned")
+    older = gql_tweet(post_id(5), AUTHOR, "known")
+    api = FakeApi(user(pinned=[pinned["rest_id"]]), [page(pinned, older, cursor=None)])
+    resp = collect_user(request({"user_id": "1", "newest_id": str(post_id(5))}), api).to_dict()
+    assert [p["text"] for p in resp["data"]["posts"]] == ["Just pinned"]
+    assert resp["data"]["next_state"]["newest_id"] == str(post_id(1))
+
+    again = FakeApi(user(pinned=[pinned["rest_id"]]), [page(pinned, older, cursor=None)])
+    resp = collect_user(request(resp["data"]["next_state"]), again).to_dict()
+    assert resp["data"]["posts"] == [] and resp["data"]["scan"] == "complete"
+
+
 def test_budget_exhaustion_keeps_watermark_and_resumes_from_cursor():
     state = {"user_id": "1", "newest_id": str(post_id(500)), "pending": None}
     first = collect_user(request(state, pages=1), FakeApi(user(), [page(gql_tweet(post_id(1), AUTHOR, "a"), cursor="c1")])).to_dict()["data"]
